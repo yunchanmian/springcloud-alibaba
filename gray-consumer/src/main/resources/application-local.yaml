@@ -1,0 +1,8 @@
+# 本地开发可覆盖端口与 Nacos 地址
+spring:
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+      config:
+        server-addr: 127.0.0.1:8848

@@ -1,0 +1,56 @@
+# 全链路金丝雀 - 灰度规则（与 GrayRuleManager 对应，可改为 Nacos 动态配置）
+gray:
+  enabled: true
+  rules:
+    user-id:
+      percentage: 10
+      whitelist:
+        - "1001"
+        - "1002"
+        - "1003"
+
+spring:
+  main:
+    allow-circular-references: true
+  cloud:
+    nacos:
+      discovery:
+        # Nacos服务发现配置
+        server-addr: 127.0.0.1:8848
+        namespace: public
+        group: DEFAULT_GROUP
+        metadata:
+          # 在Nacos元数据中标记网关版本
+          version: v1.0
+      config:
+        # Nacos配置中心，支持动态更新灰度规则
+        server-addr: 127.0.0.1:8848
+        file-extension: yaml
+        namespace: public
+        group: DEFAULT_GROUP
+        shared-configs:
+          - data-id: gray-rule.yaml
+            group: GRAY_GROUP
+            refresh: true
+    gateway:
+      discovery:
+        locator:
+          # 启用服务发现，自动从注册中心发现服务
+          enabled: true
+          lower-case-service-id: true
+      # 路由配置（lb:// 会使用 GrayLoadBalancerConfiguration 注册的灰度负载均衡器）
+      routes:
+        - id: product-service-route
+          uri: lb://gray-provider
+          predicates:
+            - Path=/api/provider/**
+          filters:
+            - StripPrefix=1
+
+        - id: consumer-service-route
+          uri: lb://gray-consumer
+          predicates:
+            - Path=/api/consumer/**
+          filters:
+            - StripPrefix=1
+

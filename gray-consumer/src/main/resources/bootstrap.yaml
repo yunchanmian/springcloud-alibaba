@@ -1,0 +1,9 @@
+# 全链路金丝雀 - 消费者服务 Bootstrap 配置（Nacos 发现与配置）
+spring:
+  application:
+    name: gray-consumer
+  profiles:
+    active: local
+
+server:
+  port: 48082
