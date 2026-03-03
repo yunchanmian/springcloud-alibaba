@@ -1,0 +1,12 @@
+# 全链路金丝雀 - 提供者 Bootstrap 配置
+# 通过 spring.profiles.active=stable 或 gray 区分版本，并设置对应 Nacos 元数据
+spring:
+  application:
+    name: gray-provider
+  profiles:
+    active: stable
+
+server:
+  port: 48081
+  servlet:
+    context-path: /provider

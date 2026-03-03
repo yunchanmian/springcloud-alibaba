@@ -1,0 +1,18 @@
+spring:
+  cloud:
+    nacos:
+#      username: nacos
+#      password: q$*Vw2YVP#EPV1TkPW
+      discovery:
+        #Nacos注册中心地址，必须配置IP地址
+        server-addr: 127.0.0.1:8848
+        #将自己的服务注册到注册中心
+        enabled: true
+      #        namespace: a769c8d9-bee5-4238-b669-18c0fe7b56f2   #正式环境
+      config:
+        server-addr: ${spring.cloud.nacos.discovery.server-addr}
+        file-extension: yml
+        namespace: ${spring.cloud.nacos.discovery.namespace}
+        group: DEFAULT_GROUP
+        refresh-enabled: true
+

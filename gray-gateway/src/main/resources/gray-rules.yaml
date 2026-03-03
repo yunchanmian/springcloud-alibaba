@@ -1,0 +1,23 @@
+gray:
+  enabled: true
+  rules:
+    # 基于用户ID的灰度规则
+    user-id:
+      enabled: true
+      type: percentage    # percentage/whitelist
+      percentage: 10      # 10%流量进入灰度
+      whitelist:
+        - "1001"
+        - "1002"
+        - "1003"
+    # 基于请求头的灰度规则
+    header:
+      enabled: true
+      header-name: "x-gray-flag"
+      header-value: "true"
+    # 基于IP的灰度规则
+    ip:
+      enabled: false
+      whitelist:
+        - "192.168.1.100"
+        - "10.0.0.1"
