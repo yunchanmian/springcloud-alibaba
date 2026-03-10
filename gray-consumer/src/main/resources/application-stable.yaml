@@ -1,0 +1,10 @@
+# 稳定版提供者：以 stable 身份注册到 Nacos
+server:
+  port: 48082
+
+spring:
+  cloud:
+    nacos:
+      discovery:
+        metadata:
+          version: stable

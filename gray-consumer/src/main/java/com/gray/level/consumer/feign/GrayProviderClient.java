@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 /**
  * 全链路金丝雀 - 调用 gray-provider 的 Feign 客户端
  * 请求会携带灰度请求头（由 GrayFeignRequestInterceptor 注入），LoadBalancer 会路由到对应版本实例。
+ * @author guobaihong
  */
 @FeignClient(name = "gray-provider")
 public interface GrayProviderClient {

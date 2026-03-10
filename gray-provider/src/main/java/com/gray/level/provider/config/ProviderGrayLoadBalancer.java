@@ -86,9 +86,8 @@ public class ProviderGrayLoadBalancer implements ReactorServiceInstanceLoadBalan
             HttpHeaders headers = context.getClientRequest().getHeaders();
 
             // 从请求头中获取灰度标签并返回
-            String first = headers.getFirst(GrayConstant.HEADER_GRAY_TAG);
-//            GrayContext grayContext = JsonUtils.parseObject(first, GrayContext.class);
-            return first;
+            //            GrayContext grayContext = JsonUtils.parseObject(first, GrayContext.class);
+            return headers.getFirst(GrayConstant.HEADER_GRAY_TAG);
         }
         // 若上下文不是RequestDataContext类型，则返回null
         return null;

@@ -1,0 +1,10 @@
+# 金丝雀版提供者：以 gray 身份注册到 Nacos，需与 stable 不同端口
+server:
+  port: 48092
+
+spring:
+  cloud:
+    nacos:
+      discovery:
+        metadata:
+          version: gray

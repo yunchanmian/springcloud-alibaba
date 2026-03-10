@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 全链路金丝雀 - 消费者对外接口
  * 网关 /api/consumer/** 会路由到此服务；本服务再通过 Feign 调用 gray-provider，灰度头会透传。
+ * @author guobaihong
  */
 @Slf4j
 @RestController
