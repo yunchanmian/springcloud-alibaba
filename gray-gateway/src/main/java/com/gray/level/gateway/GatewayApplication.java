@@ -9,6 +9,7 @@ import org.springframework.cloud.loadbalancer.annotation.LoadBalancerClients;
 /**
  * 全链路金丝雀发布 - 网关启动类
  * 启用 Nacos 服务发现，并为所有 lb:// 路由启用灰度负载均衡。
+ * @author guobaihong
  */
 @EnableDiscoveryClient
 @SpringBootApplication

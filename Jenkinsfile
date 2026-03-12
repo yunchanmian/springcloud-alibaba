@@ -16,12 +16,12 @@ pipeline {
     environment {
         // 镜像仓库命名空间（通常为项目名）
         PROJECT_NAME = 'gray-level-dome'
-        // 部署目录
-        DEPLOY_PATH = '/opt/app/${PROJECT_NAME}'
-        // 日志目录
-        LOG_DIR = '/opt/logs/${PROJECT_NAME}'
-        // 备份目录
-        BACKUP_DIR = '/opt/backup/${PROJECT_NAME}'
+        // 部署目录 - 使用双引号确保变量被展开
+        DEPLOY_PATH = "/opt/app/${PROJECT_NAME}"
+        // 日志目录 - 使用双引号确保变量被展开
+        LOG_DIR = "/opt/logs/${PROJECT_NAME}"
+        // 备份目录 - 使用双引号确保变量被展开
+        BACKUP_DIR = "/opt/backup/${PROJECT_NAME}"
         // 服务器 JDK 路径
         REMOTE_JAVA_HOME = '/usr/lib/jvm/java-8-openjdk-amd64'
         // Git 分支名称，用于镜像标签
@@ -46,15 +46,13 @@ pipeline {
         choice(
                 name: 'SERVICES_TO_DEPLOY',
                 choices: ['all', 'gray-gateway', 'gray-consumer', 'gray-provider'],
-                description: '选择要构建的微服务（all 表示全部）',
-                defaultValue: 'all'
+                description: '选择要构建的微服务（all 表示全部）'
         )
         // 部署环境
         choice(
                 name: 'DEPLOY_ENV',
                 choices: ['local', 'gray', 'stable'],
-                description: '选择部署环境',
-                defaultValue: 'local'
+                description: '选择部署环境'
         )
         // Git分支参数
         string(
@@ -166,11 +164,17 @@ pipeline {
                         moduleCheckScript += """
                             if [ -d "${serviceName}" ]; then
                                 echo "✅ 找到模块: ${serviceName}"
-                                ((MODULE_COUNT++))
+                                MODULE_COUNT=\$((MODULE_COUNT + 1))
                                 
                                 # 检查模块结构
                                 if [ -f "${serviceName}/pom.xml" ]; then
                                     echo "  - ✅ 包含pom.xml"
+                                     # 检查pom.xml中是否有spring-boot-maven-plugin
+                                    if grep -q "spring-boot-maven-plugin" "${serviceName}/pom.xml"; then
+                                        echo "  - ✅ 配置了spring-boot-maven-plugin"
+                                    else
+                                        echo "  - ⚠️ 未配置spring-boot-maven-plugin"
+                                    fi
                                 else
                                     echo "  - ❌ 缺少pom.xml"
                                 fi
@@ -657,9 +661,50 @@ def deployService(String serviceName, int port) {
         echo "服务启动完成，PID: \$(cat ${pidFile})"
         echo "日志文件: ${logFile}"
     """
+    // 使用多种方法确保文件创建成功
+    echo "创建启动脚本..."
 
-    writeFile file: "${deployDir}/start.sh", text: startScript
-    sh "chmod +x ${deployDir}/start.sh"
+    // 方法1: 使用 writeFile
+    try {
+        writeFile file: "${deployDir}/start.sh", text: startScript
+        echo "✅ writeFile 创建脚本成功"
+    } catch (Exception e) {
+        echo "⚠️ writeFile 失败: ${e.message}"
+        // 方法2: 使用 shell 命令创建
+        sh """
+            cat > "${deployDir}/start.sh" << 'EOF' 
+${startScript} 
+EOF
+        """
+        echo "✅ shell 命令创建脚本成功"
+    }
+    // 验证文件是否创建
+    sh """
+        echo "=== 验证启动脚本 ==="
+        echo "文件路径: ${deployDir}/start.sh"
+        if [ -f "${deployDir}/start.sh" ]; then
+            echo "✅ 文件存在"
+            ls -lh "${deployDir}/start.sh"
+            echo ""
+            echo "=== 文件内容前5行 ==="
+            head -5 "${deployDir}/start.sh"
+        else
+            echo "❌ 文件不存在，尝试重新创建..."
+            cat > "${deployDir}/start.sh" << 'EOF' 
+${startScript} 
+EOF
+            ls -lh "${deployDir}/start.sh" || { echo "❌ 重新创建失败"; exit 1; }
+        fi
+    """
+
+    // 设置执行权限
+    sh """
+        echo "设置执行权限..."
+        chmod +x "${deployDir}/start.sh"
+        echo "✅ 权限设置完成"
+        ls -l "${deployDir}/start.sh"
+    """
+
 
     // 7. 生成停止脚本
     def stopScript = """
@@ -704,8 +749,22 @@ def deployService(String serviceName, int port) {
         echo "服务停止完成"
     """
 
-    writeFile file: "${deployDir}/stop.sh", text: stopScript
-    sh "chmod +x ${deployDir}/stop.sh"
+    // 创建停止脚本
+    echo "创建停止脚本..."
+    try {
+        writeFile file: "${deployDir}/stop.sh", text: stopScript
+    } catch (Exception e) {
+        sh """
+            cat > "${deployDir}/stop.sh" << 'EOF' 
+${stopScript} 
+EOF
+        """
+    }
+
+    sh """
+        chmod +x "${deployDir}/stop.sh"
+        echo "停止脚本创建完成"
+    """
 
     // 8. 生成状态检查脚本
     def statusScript = """
@@ -746,13 +805,12 @@ def deployService(String serviceName, int port) {
         fi
     """
 
-    writeFile file: "${deployDir}/status.sh", text: statusScript
-    sh "chmod +x ${deployDir}/status.sh"
-
     // 9. 启动服务
     echo "启动新服务 ${serviceName}..."
     sh """
         cd "${deployDir}"
+        echo "当前目录: \$(pwd)"
+        echo "执行启动脚本..."
         ./start.sh
         
         # 等待服务启动
