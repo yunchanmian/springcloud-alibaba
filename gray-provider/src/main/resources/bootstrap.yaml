@@ -7,6 +7,6 @@ spring:
     active: stable
 
 server:
-  port: 48081
+  port: 48090
   servlet:
     context-path: /provider

@@ -78,13 +78,12 @@ public class GrayRuleManager {
     }
 
     /**
-     * 监听灰度规则配置文件更新。
+     * 监听 Nacos 中灰度规则变更，实现热更新（可选，需 Nacos Config）。
      * <p>
      * 当灰度规则配置文件被更新时，该方法会被调用。
      *
      * @param newRules 新的灰度规则配置文件内容
      */
-    /** 监听 Nacos 中灰度规则变更，实现热更新（可选，需 Nacos Config） */
     @NacosConfigListener(dataId = "gray-rules.yaml", groupId = "DEFAULT_GROUP")
     public void onGrayRulesUpdated(String newRules) {
         // 可解析 newRules 更新 userPercentage、userWhitelist 等

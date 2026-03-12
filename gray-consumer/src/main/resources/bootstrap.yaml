@@ -6,4 +6,4 @@ spring:
     active: local
 
 server:
-  port: 48082
+  port: 48070

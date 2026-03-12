@@ -1,10 +1,19 @@
 # 稳定版提供者：以 stable 身份注册到 Nacos
 server:
-  port: 48082
+  port: 48072
 
 spring:
   cloud:
     nacos:
       discovery:
+        server-addr: 127.0.0.1:8848
+        namespace: public
+        group: DEFAULT_GROUP
+        # 消费者自身在 Nacos 的元数据（网关路由到本服务时可按 version 做灰度，此处统一为 stable）
         metadata:
           version: stable
+      config:
+        server-addr: 127.0.0.1:8848
+        file-extension: yaml
+        namespace: public
+        group: DEFAULT_GROUP

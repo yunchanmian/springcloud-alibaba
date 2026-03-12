@@ -1,757 +1,779 @@
+// Jenkinsfile (Declarative Pipeline)
+// 适用于 Spring Cloud Alibaba 微服务项目，自动构建多模块并部署到 本机
+
 pipeline {
+    // 指定在任何可用的 agent 上执行
     agent any
 
-    parameters {
-        // 基础参数
-        string(name: 'VERSION', defaultValue: '1.0.0', description: '构建版本号')
-        booleanParam(name: 'SKIP_TESTS', defaultValue: false, description: '是否跳过测试')
-        choice(
-                name: 'DEPLOY_ENV',
-                choices: ['dev', 'test', 'staging', 'prod'],
-                description: '部署环境'
-        )
-
-        // 服务选择参数
-        extendedChoice(
-                name: 'SERVICES_TO_DEPLOY',
-                type: 'CHECKBOX',
-                defaultValue: 'nacos,sentinel,seata,gateway,auth-service,user-service,order-service,product-service',
-                description: '选择要部署的服务',
-                value: 'nacos,sentinel,seata,gateway,auth-service,user-service,order-service,product-service,inventory-service,payment-service',
-                visibleItemCount: 10
-        )
-
-        // 部署策略
-        choice(
-                name: 'DEPLOY_STRATEGY',
-                choices: ['rolling', 'parallel', 'sequential'],
-                defaultValue: 'rolling',
-                description: '部署策略: rolling-滚动部署, parallel-并行部署, sequential-顺序部署'
-        )
-
-        // 健康检查配置
-        booleanParam(name: 'ENABLE_HEALTH_CHECK', defaultValue: true, description: '是否启用健康检查')
-        number(name: 'HEALTH_CHECK_TIMEOUT', defaultValue: 300, description: '健康检查超时时间(秒)')
-
-        // 回滚配置
-        booleanParam(name: 'ENABLE_ROLLBACK', defaultValue: false, description: '是否启用自动回滚')
-        number(name: 'ROLLBACK_THRESHOLD', defaultValue: 3, description: '失败次数阈值(触发回滚)')
-    }
-
     tools {
+        // 使用全局工具中配置的 Maven（名称为 "3.9.12"）并将其添加到 PATH 环境变量
         maven "3.9.12"
+        // 使用全局工具中配置的 JDK 8（名称为 'jdk8'）并设置 JAVA_HOME
         jdk 'jdk8'
     }
 
+    // 定义全局环境变量
     environment {
-        // 基础配置
-        BASE_DEPLOY_PATH = '/opt/app/spring-cloud-alibaba'
+        // 镜像仓库命名空间（通常为项目名）
+        PROJECT_NAME = 'gray-level-dome'
+        // 部署目录
+        DEPLOY_PATH = '/opt/app/${PROJECT_NAME}'
+        // 日志目录
+        LOG_DIR = '/opt/logs/${PROJECT_NAME}'
+        // 备份目录
+        BACKUP_DIR = '/opt/backup/${PROJECT_NAME}'
+        // 服务器 JDK 路径
         REMOTE_JAVA_HOME = '/usr/lib/jvm/java-8-openjdk-amd64'
-        MAVEN_PROFILE = "${params.DEPLOY_ENV}"
+        // Git 分支名称，用于镜像标签
+        BRANCH_NAME = "${env.BRANCH_NAME}"
+        // 构建号，用于镜像标签唯一性
+        BUILD_NUMBER = "${env.BUILD_NUMBER}"
+        // 微服务模块列表（项目子模块），使用逗号分隔的字符串
+        SERVICE_MODULES = 'gray-gateway,gray-consumer,gray-provider'
+        // 服务端口映射（格式：服务名:端口，用于停止服务和健康检查）
+        SERVICE_PORTS = 'gray-gateway:48080,gray-consumer:48082,gray-provider:48081'
+        // 是否跳过单元测试（可参数化）
+        SKIP_TESTS = 'false'
+        // 此变量将用于Maven命令，激活对应的profile
+        ACTIVE_MAVEN_PROFILE = "${params.DEPLOY_ENV}"
+        // JVM参数
+        JAVA_OPTS = '-Xms512m -Xmx1024m -XX:+UseG1GC -Dfile.encoding=UTF-8'
+    }
 
-        // Spring Cloud Alibaba 版本
-        SC_ALIBABA_VERSION = '2022.0.0.0'
+    // 参数化构建，允许用户手动选择要构建的服务或指定版本
+    parameters {
+        // 选择要构建的服务，默认为全部
+        choice(
+                name: 'SERVICES_TO_DEPLOY',
+                choices: ['all', 'gray-gateway', 'gray-consumer', 'gray-provider'],
+                description: '选择要构建的微服务（all 表示全部）',
+                defaultValue: 'all'
+        )
+        // 部署环境
+        choice(
+                name: 'DEPLOY_ENV',
+                choices: ['local', 'gray', 'stable'],
+                description: '选择部署环境',
+                defaultValue: 'local'
+        )
+        // Git分支参数
+        string(
+                name: 'BRANCH_NAME',
+                defaultValue: 'main',
+                description: '要构建的Git分支名'
+        )
+        // 是否跳过测试
+        booleanParam(
+                name: 'SKIP_TESTS',
+                defaultValue: false,
+                description: '跳过单元测试'
+        )
+        // 是否执行Sonar扫描
+        booleanParam(
+                name: 'SONAR_SCAN',
+                defaultValue: false,
+                description: '执行SonarQube代码质量检查'
+        )
+        // 部署前确认
+        booleanParam(
+                name: 'DEPLOY_CONFIRM',
+                defaultValue: false,
+                description: '确认执行部署（安全开关）'
+        )
+    }
 
-        // 服务定义 - Spring Cloud Alibaba 完整体系
-        SERVICES = [
-                // 基础设施服务
-                'nacos': [
-                        port: '8848',
-                        deployPath: "${BASE_DEPLOY_PATH}/nacos",
-                        healthEndpoint: '/nacos/v1/ns/service/list',
-                        buildPath: 'nacos',
-                        isInfrastructure: true,
-                        startupOrder: 1,
-                        jarName: 'nacos-server.jar',
-                        memory: '1g',
-                        isStandalone: true
-                ],
-                'sentinel': [
-                        port: '8719',
-                        dashboardPort: '8080',
-                        deployPath: "${BASE_DEPLOY_PATH}/sentinel",
-                        healthEndpoint: '/actuator/health',
-                        buildPath: 'sentinel-dashboard',
-                        isInfrastructure: true,
-                        startupOrder: 2,
-                        jarName: 'sentinel-dashboard.jar',
-                        memory: '512m'
-                ],
-                'seata': [
-                        port: '8091',
-                        deployPath: "${BASE_DEPLOY_PATH}/seata",
-                        healthEndpoint: '/actuator/health',
-                        buildPath: 'seata-server',
-                        isInfrastructure: true,
-                        startupOrder: 3,
-                        jarName: 'seata-server.jar',
-                        memory: '1g',
-                        configType: 'nacos'
-                ],
-
-                // 核心服务
-                'gateway': [
-                        port: '9999',
-                        deployPath: "${BASE_DEPLOY_PATH}/gateway",
-                        healthEndpoint: '/actuator/health',
-                        buildPath: 'cloud-gateway',
-                        startupOrder: 4,
-                        jarName: 'cloud-gateway.jar',
-                        memory: '1g',
-                        dependencies: ['nacos', 'sentinel']
-                ],
-                'auth-service': [
-                        port: '8001',
-                        deployPath: "${BASE_DEPLOY_PATH}/auth-service",
-                        healthEndpoint: '/actuator/health',
-                        buildPath: 'auth-service',
-                        startupOrder: 5,
-                        jarName: 'auth-service.jar',
-                        memory: '512m',
-                        dependencies: ['nacos', 'sentinel']
-                ],
-
-                // 业务服务
-                'user-service': [
-                        port: '8002',
-                        deployPath: "${BASE_DEPLOY_PATH}/user-service",
-                        healthEndpoint: '/actuator/health',
-                        buildPath: 'user-service',
-                        startupOrder: 6,
-                        jarName: 'user-service.jar',
-                        memory: '512m',
-                        dependencies: ['nacos', 'sentinel', 'seata']
-                ],
-                'order-service': [
-                        port: '8003',
-                        deployPath: "${BASE_DEPLOY_PATH}/order-service",
-                        healthEndpoint: '/actuator/health',
-                        buildPath: 'order-service',
-                        startupOrder: 7,
-                        jarName: 'order-service.jar',
-                        memory: '512m',
-                        dependencies: ['nacos', 'sentinel', 'seata']
-                ],
-                'product-service': [
-                        port: '8004',
-                        deployPath: "${BASE_DEPLOY_PATH}/product-service",
-                        healthEndpoint: '/actuator/health',
-                        buildPath: 'product-service',
-                        startupOrder: 8,
-                        jarName: 'product-service.jar',
-                        memory: '512m',
-                        dependencies: ['nacos', 'sentinel']
-                ],
-                'inventory-service': [
-                        port: '8005',
-                        deployPath: "${BASE_DEPLOY_PATH}/inventory-service",
-                        healthEndpoint: '/actuator/health',
-                        buildPath: 'inventory-service',
-                        startupOrder: 9,
-                        jarName: 'inventory-service.jar',
-                        memory: '512m',
-                        dependencies: ['nacos', 'sentinel', 'seata']
-                ],
-                'payment-service': [
-                        port: '8006',
-                        deployPath: "${BASE_DEPLOY_PATH}/payment-service",
-                        healthEndpoint: '/actuator/health',
-                        buildPath: 'payment-service',
-                        startupOrder: 10,
-                        jarName: 'payment-service.jar',
-                        memory: '512m',
-                        dependencies: ['nacos', 'sentinel', 'seata']
-                ]
-        ]
-
-        // 环境特定配置
-        NACOS_CONFIG = [
-                'dev': [
-                        serverAddr: 'localhost:8848',
-                        namespace: 'dev',
-                        group: 'DEFAULT_GROUP'
-                ],
-                'test': [
-                        serverAddr: 'nacos-test:8848',
-                        namespace: 'test',
-                        group: 'TEST_GROUP'
-                ],
-                'staging': [
-                        serverAddr: 'nacos-staging:8848',
-                        namespace: 'staging',
-                        group: 'STAGING_GROUP'
-                ],
-                'prod': [
-                        serverAddr: 'nacos-prod-cluster:8848',
-                        namespace: 'prod',
-                        group: 'PROD_GROUP'
-                ]
-        ]
-
-        SENTINEL_CONFIG = [
-                'dev': [
-                        dashboard: 'localhost:8080',
-                        transport: '8719'
-                ],
-                'prod': [
-                        dashboard: 'sentinel-dashboard-cluster:8080',
-                        transport: '8719'
-                ]
-        ]
-
-        SEATA_CONFIG = [
-                'dev': [
-                        serviceGroup: 'default',
-                        serverAddr: 'localhost:8091',
-                        configType: 'nacos'
-                ],
-                'prod': [
-                        serviceGroup: 'seata-server-group',
-                        serverAddr: 'seata-server-cluster:8091',
-                        configType: 'nacos'
-                ]
-        ]
+    // 流水线选项配置
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+        disableConcurrentBuilds()
+        timestamps()
     }
 
     stages {
-        // 阶段 1: 环境准备和验证
-        stage('环境准备') {
+        // 阶段1：检出代码
+        stage('Checkout') {
+            steps {
+                // 从 Git 仓库拉取代码
+                echo '开始从Git仓库拉取代码...'
+                // 从Git仓库拉取代码，支持分支选择和凭证认证
+                checkout scmGit(branches: [[
+                    name: "*/${params.BRANCH_NAME ?: 'main'}"]],
+                    extensions: [],
+                    userRemoteConfigs: [[
+                        credentialsId: '8a75608f-a8cc-45dd-9a40-ade046ffb18a',
+                        url: 'https://github.com/yunchanmian/springcloud-alibaba.git']
+                    ])
+
+                // 记录构建信息
+                script {
+                    sh """
+                        echo "=== 构建信息 ===" > build-info.txt
+                        echo "项目: ${PROJECT_NAME}" >> build-info.txt
+                        echo "构建编号: ${BUILD_NUMBER}" >> build-info.txt
+                        echo "Git分支: ${env.BRANCH_NAME}" >> build-info.txt
+                        echo "Git提交: \${GIT_COMMIT}" >> build-info.txt
+                        echo "构建时间: \$(date +\"%Y-%m-%d %H:%M:%S\")" >> build-info.txt
+                        echo "构建用户: \${BUILD_USER_ID}" >> build-info.txt
+                        echo "工作空间: ${env.WORKSPACE}" >> build-info.txt
+                    """
+                    // 显示构建信息
+                    echo "检出代码完成，分支：${env.BRANCH_NAME}"
+                    echo "提交ID：${env.GIT_COMMIT}"
+                    echo "  - 工作目录: ${env.WORKSPACE}"
+                }
+                echo '代码拉取完成！'
+            }
+        }
+
+
+        // 阶段2：环境检查
+        stage('环境检查') {
             steps {
                 script {
-                    echo "=== Spring Cloud Alibaba 微服务部署流水线 ==="
-                    echo "环境: ${params.DEPLOY_ENV}"
-                    echo "版本: ${params.VERSION}"
-                    echo "部署策略: ${params.DEPLOY_STRATEGY}"
-                    echo "选择的服务: ${params.SERVICES_TO_DEPLOY}"
+                    echo '开始检查构建环境...'
 
-                    // 检查必要工具
-                    sh '''
-                        java -version
-                        mvn -version
-                        docker --version 2>/dev/null || echo "Docker 未安装，跳过容器化部署"
-                    '''
-
-                    // 验证目录权限
+                    // 检查Java和Maven版本
                     sh """
-                        mkdir -p ${BASE_DEPLOY_PATH}
-                        echo "部署基础目录: ${BASE_DEPLOY_PATH}"
-                        ls -la ${BASE_DEPLOY_PATH} || true
+                        echo "=== 环境信息 ==="
+                        java -version
+                        echo ""
+                        mvn --version
+                        echo ""
+                        echo "工作目录:"
+                        pwd
+                        echo ""
+                        echo "项目结构:"
+                        ls -la
+                    """
+                    // 检查微服务模块目录
+                    echo "检查微服务模块..."
+                    echo ""
+
+                    echo "检查微服务模块..."
+                    echo ""
+
+
+                    // 确定要处理的服务列表
+                    def services = getServicesToProcess()
+
+                    def moduleCheckScript = """
+                            MODULE_COUNT=0
                     """
 
-                    // 设置构建描述
-                    currentBuild.description = "SCA-${params.DEPLOY_ENV.toUpperCase()}-v${params.VERSION}"
-                }
-            }
-        }
-
-        // 阶段 2: 代码检出
-        stage('检出代码') {
-            steps {
-                checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: '*/master']],
-                        extensions: [],
-                        userRemoteConfigs: [[
-                                                    url: 'https://gitee.com/your-repo/spring-cloud-alibaba-demo.git',
-                                                    credentialsId: 'your-git-credential'
-                                            ]]
-                ])
-
-                // 记录代码信息
-                script {
-                    sh 'git log --oneline -5'
-                    env.GIT_COMMIT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    echo "当前提交: ${env.GIT_COMMIT}"
-                }
-            }
-        }
-
-        // 阶段 3: 代码质量检查
-        stage('代码质量检查') {
-            parallel {
-                stage('代码编译') {
-                    steps {
-                        script {
-                            sh 'mvn clean compile -P${MAVEN_PROFILE} -DskipTests'
-                        }
+                    services.each { service ->
+                        def serviceName = service.trim()
+                        moduleCheckScript += """
+                            if [ -d "${serviceName}" ]; then
+                                echo "✅ 找到模块: ${serviceName}"
+                                ((MODULE_COUNT++))
+                                
+                                # 检查模块结构
+                                if [ -f "${serviceName}/pom.xml" ]; then
+                                    echo "  - ✅ 包含pom.xml"
+                                else
+                                    echo "  - ❌ 缺少pom.xml"
+                                fi
+                                
+                                if [ -d "${serviceName}/src/main/java" ]; then
+                                    echo "  - ✅ 包含Java源码"
+                                else
+                                    echo "  - ⚠️ 缺少Java源码"
+                                fi
+                            else
+                                echo "❌ 未找到模块: ${serviceName}"
+                            fi
+                        """
                     }
-                }
 
-                stage('静态代码分析') {
-                    steps {
-                        script {
-                            // 可以使用 SonarQube 或 CheckStyle
-                            sh 'mvn checkstyle:check 2>/dev/null || echo "CheckStyle 检查完成"'
-                        }
-                    }
+                    moduleCheckScript += """
+                        echo ""
+                        echo "找到模块数: \${MODULE_COUNT}/${services.size()}"
+                        
+                        if [ \${MODULE_COUNT} -eq 0 ]; then
+                            echo "错误: 未找到任何微服务模块！"
+                            exit 1
+                        fi
+                    """
+
+                    sh moduleCheckScript
+
+                    echo '环境检查完成！'
                 }
             }
         }
 
-        // 阶段 4: 构建和单元测试
-        stage('构建和测试') {
+//        // 阶段2：代码质量检查（可选）
+//        stage('代码质量检查') {
+//            when {
+//                expression { params.SONAR_SCAN == true }
+//            }
+//            steps {
+//                script {
+//                    echo '开始代码质量检查...'
+//                    withSonarQubeEnv('SonarQube-Server') {
+//                        sh """
+//                            mvn clean verify sonar:sonar \
+//                                -Dsonar.projectKey=${PROJECT_NAME} \
+//                                -Dsonar.projectName=${PROJECT_NAME} \
+//                                -Dsonar.host.url=${SONAR_HOST_URL} \
+//                                -Dsonar.login=${SONAR_AUTH_TOKEN}
+//                        """
+//                    }
+//                    echo '代码质量检查完成！'
+//                }
+//            }
+//        }
+
+        // 阶段3：依赖检查
+        stage('依赖检查') {
             steps {
                 script {
-                    def mvnCommand = "mvn clean package -P${MAVEN_PROFILE} -Dspring-cloud-alibaba.version=${SC_ALIBABA_VERSION}"
-                    if (params.SKIP_TESTS.toBoolean()) {
+                    echo '开始检查项目依赖...'
+                    sh '''
+                        echo "检查Spring Cloud和Alibaba依赖..."
+                        # 检查依赖树，查看是否有版本冲突
+                        mvn dependency:tree -Dincludes=org.springframework.cloud,com.alibaba.cloud > dependency-tree.txt
+                        
+                        echo "检查依赖版本..."
+                        mvn versions:display-dependency-updates -Dversions.displayDependencyUpdates=false \\
+                            -Dversions.displayPropertyUpdates=true \\
+                            -Dversions.displayPluginUpdates=false
+                        
+                        echo ""
+                        echo "依赖检查完成"
+                        echo "依赖树已保存到: dependency-tree.txt"
+                    '''
+                    echo '✅ 依赖检查完成！'
+                }
+            }
+            post {
+                always {
+                    // 保存依赖树文件
+                    archiveArtifacts artifacts: 'dependency-tree.txt', fingerprint: true
+                }
+            }
+        }
+
+
+        // 阶段5：Maven编译打包
+        stage('Maven Build') {
+            steps {
+                script {
+                    echo '开始编译Spring Cloud Alibaba微服务项目...'
+
+                    // 构建命令
+                    def mvnCommand = "mvn clean package"
+
+                    // 添加Maven Profile
+                    if (params.DEPLOY_ENV) {
+                        mvnCommand += " -P${params.DEPLOY_ENV}"
+                        echo "激活Maven Profile: ${params.DEPLOY_ENV}"
+                    }
+
+                    // 是否跳过测试
+                    if (params.SKIP_TESTS) {
                         mvnCommand += " -DskipTests"
-                    } else {
-                        mvnCommand += " -DfailIfNoTests=false"
+                        echo "跳过单元测试"
                     }
 
-                    echo "执行构建命令: ${mvnCommand}"
+                    // 执行构建
+                    echo "执行命令: ${mvnCommand}"
                     sh mvnCommand
 
-                    // 生成构建报告
-                    junit '**/target/surefire-reports/*.xml'
+                    def buildCheckScript = """
+                        echo "=== 构建产物检查 ==="
+                        echo ""
+                        
+                        BUILD_SUCCESS=true
+                    """
+                    // 获取所有服务列表
+                    def services = env.SERVICE_MODULES.split(',')
+
+
+                    services.each { service ->
+                        def serviceName = service.trim()
+                        buildCheckScript += """
+                            if [ -d "${serviceName}/target" ]; then
+                                JAR_FILE=\$(find "${serviceName}/target" -name "*.jar" -type f | grep -v "original-" | grep -v "sources" | grep -v "javadoc" | head -1)
+                                if [ -f "\${JAR_FILE}" ]; then
+                                    echo "✅ ${serviceName}:"
+                                    echo "  - 文件: \$(basename \${JAR_FILE})"
+                                    echo "  - 大小: \$(ls -lh "\${JAR_FILE}" | awk '{print \$5}')"
+                                    echo "  - 修改时间: \$(stat -c %y "\${JAR_FILE}" | cut -d. -f1)"
+                                else
+                                    echo "❌ ${serviceName}: 未找到可执行JAR文件"
+                                    BUILD_SUCCESS=false
+                                fi
+                            else
+                                echo "❌ ${serviceName}: 无target目录"
+                                BUILD_SUCCESS=false
+                            fi
+                        """
+                    }
+
+                    buildCheckScript += """
+                        echo ""
+                        if [ "\${BUILD_SUCCESS}" = "true" ]; then
+                            echo "✅ 所有模块构建成功"
+                        else
+                            echo "❌ 部分模块构建失败！"
+                            exit 1
+                        fi
+                    """
+
+                    sh buildCheckScript
+
+                    echo '✅ 编译构建完成！'
+
+                    // 更新构建描述
+                    currentBuild.description = "环境: ${params.DEPLOY_ENV} | 服务: ${params.SERVICES_TO_DEPLOY} | 分支: ${params.BRANCH_NAME}"
                 }
             }
 
             post {
                 success {
-                    script {
-                        // 归档所有服务的jar包
-                        def serviceList = params.SERVICES_TO_DEPLOY.split(',')
-                        serviceList.each { serviceName ->
-                            def trimmedName = serviceName.trim()
-                            def serviceConfig = env.SERVICES[trimmedName]
-                            if (serviceConfig) {
-                                def buildPath = serviceConfig.buildPath
-                                def jarPattern = "${buildPath}/target/*.jar"
-                                if (fileExists(jarPattern)) {
-                                    archiveArtifacts artifacts: jarPattern, fingerprint: true
-                                    stash name: "jar-${trimmedName}", includes: "${jarPattern}"
-                                    echo "✅ 已存档服务: ${trimmedName}"
-                                }
-                            }
-                        }
+                    // 归档构建产物
+                    archiveArtifacts artifacts: '**/target/*.jar', fingerprint: true
+                    archiveArtifacts artifacts: 'build-info.txt', fingerprint: true
+                    echo '✅ 构建产物已归档'
+                }
+                failure {
+                    echo '❌ 编译构建失败，请检查Maven日志'
+                }
+            }
+        }
+        // 阶段6：部署确认
+        stage('部署确认') {
+            steps {
+                script {
+                    echo '⚠️ 部署前确认 ⚠️'
+                    echo "即将部署以下服务: ${params.SERVICES_TO_DEPLOY}"
+                    echo "构建编号: ${BUILD_NUMBER}"
+                    echo "部署环境: ${params.DEPLOY_ENV}"
+                    echo "目标路径: ${DEPLOY_PATH}"
+
+                    // 检查是否需要人工确认
+                    if (params.DEPLOY_ENV == 'stable') {
+                        input message: '确认部署到生产环境？', ok: '确认部署'
+                    } else if (!params.DEPLOY_CONFIRM) {
+                        input message: "确认部署到 ${params.DEPLOY_ENV} 环境？", ok: '确认部署'
+                    } else {
+                        echo "✅ 已通过参数确认部署"
                     }
                 }
             }
         }
 
-        // 阶段 5: 构建 Docker 镜像（可选）
-        stage('Docker 构建') {
-            when {
-                expression { params.DEPLOY_ENV == 'prod' || params.DEPLOY_ENV == 'staging' }
-            }
+        // 并行构建和部署（每个服务独立处理）
+        stage('Build & Deploy') {
             steps {
                 script {
-                    echo "开始构建 Docker 镜像..."
+                    // 解析端口映射
+                    def portMap = getPortMap()
 
-                    def serviceList = params.SERVICES_TO_DEPLOY.split(',')
-                    serviceList.each { serviceName ->
-                        def trimmedName = serviceName.trim()
-                        def serviceConfig = env.SERVICES[trimmedName]
-                        if (serviceConfig && fileExists("${serviceConfig.buildPath}/Dockerfile")) {
-                            dir(serviceConfig.buildPath) {
-                                docker.build("sca-${trimmedName}:${params.VERSION}", ".")
-                                echo "✅ Docker 镜像构建完成: sca-${trimmedName}:${params.VERSION}"
-                            }
+                    // 确定要处理的服务列表
+                    def services = getServicesToProcess()
+
+                    echo "将部署以下服务: ${services}"
+
+                    // 定义并行任务
+                    def parallelStages = [:]
+                    services.each { service ->
+                        def serviceName = service.trim()
+                        def port = portMap[serviceName]
+                        // 确保端口映射存在
+                        if (port == null) {
+                            error "错误：未找到服务 ${serviceName} 的端口映射，请检查 SERVICE_PORTS 配置"
                         }
-                    }
-                }
-            }
-        }
-
-        // 阶段 6: 部署基础设施服务
-        stage('部署基础设施') {
-            when {
-                expression {
-                    currentBuild.result == null || currentBuild.result == 'SUCCESS'
-                }
-            }
-            steps {
-                script {
-                    def infraServices = ['nacos', 'sentinel', 'seata']
-                    def selectedServices = params.SERVICES_TO_DEPLOY.split(',')
-
-                    infraServices.each { infraService ->
-                        if (selectedServices.contains(infraService)) {
-                            echo "🚀 开始部署基础设施: ${infraService}"
-                            deploySpringCloudAlibabaService(infraService)
-                        }
-                    }
-                }
-            }
-        }
-
-        // 阶段 7: 部署业务服务
-        stage('部署业务服务') {
-            when {
-                expression {
-                    currentBuild.result == null || currentBuild.result == 'SUCCESS'
-                }
-            }
-            steps {
-                script {
-                    def selectedServices = params.SERVICES_TO_DEPLOY.split(',')
-                    def businessServices = selectedServices.findAll {
-                        service -> !['nacos', 'sentinel', 'seata'].contains(service.trim())
-                    }
-
-                    if (businessServices.size() > 0) {
-                        echo "开始部署业务服务，数量: ${businessServices.size()}"
-
-                        // 根据部署策略选择部署方式
-                        if (params.DEPLOY_STRATEGY == 'parallel') {
-                            // 并行部署
-                            parallel businessServices.collectEntries { serviceName ->
-                                [(serviceName.trim()): {
-                                    script {
-                                        deploySpringCloudAlibabaService(serviceName.trim())
-                                    }
-                                }]
-                            }
-                        } else if (params.DEPLOY_STRATEGY == 'rolling') {
-                            // 滚动部署
-                            businessServices.each { serviceName ->
+                        parallelStages[serviceName] = {
+                            stage("部署-${serviceName}") {
                                 script {
-                                    deploySpringCloudAlibabaService(serviceName.trim())
-                                    // 滚动部署间隔
-                                    sleep 30
+                                    deployService(serviceName, port)
                                 }
+                            }
+                        }
+                    }
+                    parallel parallelStages
+                }
+            }
+        }
+
+
+        // 阶段8：健康检查
+        stage('健康检查') {
+            steps {
+                script {
+                    echo '开始服务健康检查...'
+
+                    // 重新解析端口映射
+                    def portMap = getPortMap()
+
+                    // 确定要检查的服务
+                    def services = getServicesToProcess()
+
+                    // 检查每个服务
+                    services.each { service ->
+                        def serviceName = service.trim()
+                        def port = portMap[serviceName]
+
+                        if (port) {
+                            echo "检查服务 ${serviceName} (端口: ${port})..."
+
+                            // 健康检查
+                            def healthCheckPassed = false
+                            def maxRetries = 10
+                            def retryCount = 0
+
+                            while (retryCount < maxRetries && !healthCheckPassed) {
+                                retryCount++
+                                try {
+                                    // 尝试访问健康端点
+                                    def response = sh(
+                                            script: """
+                                            curl -s -o /dev/null -w "%{http_code}" \
+                                            http://localhost:${port}/actuator/health \
+                                            --max-time 5 || echo "000"
+                                        """,
+                                            returnStdout: true
+                                    ).trim()
+
+                                    if (response == "200") {
+                                        echo "✅ 服务 ${serviceName} 健康检查通过 (HTTP ${response})"
+                                        healthCheckPassed = true
+                                    } else {
+                                        echo "⏳ 服务 ${serviceName} 健康检查失败 (HTTP ${response})，重试 ${retryCount}/${maxRetries}"
+                                        sleep(5) // 等待5秒
+                                    }
+                                } catch (Exception e) {
+                                    echo "⚠️ 服务 ${serviceName} 健康检查异常: ${e.message}"
+                                    sleep(5)
+                                }
+                            }
+
+                            if (!healthCheckPassed) {
+                                echo "❌ 服务 ${serviceName} 健康检查失败，请检查日志"
+                                // 这里可以选择失败但不停止流水线
+                                // currentBuild.result = 'UNSTABLE'
                             }
                         } else {
-                            // 顺序部署
-                            businessServices.each { serviceName ->
-                                script {
-                                    deploySpringCloudAlibabaService(serviceName.trim())
-                                }
-                            }
+                            echo "⚠️ 未找到服务 ${serviceName} 的端口配置"
                         }
                     }
-                }
-            }
-        }
 
-        // 阶段 8: 集成测试和验证
-        stage('集成验证') {
-            when {
-                expression {
-                    params.ENABLE_HEALTH_CHECK.toBoolean() &&
-                            (currentBuild.result == null || currentBuild.result == 'SUCCESS')
-                }
-            }
-            steps {
-                script {
-                    timeout(time: params.HEALTH_CHECK_TIMEOUT, unit: 'SECONDS') {
-                        script {
-                            // 1. 服务健康检查
-                            def selectedServices = params.SERVICES_TO_DEPLOY.split(',')
-                            def allHealthy = true
-
-                            selectedServices.each { serviceName ->
-                                def trimmedName = serviceName.trim()
-                                def serviceConfig = env.SERVICES[trimmedName]
-                                if (serviceConfig && serviceConfig.port) {
-                                    def healthUrl = "http://localhost:${serviceConfig.port}${serviceConfig.healthEndpoint}"
-                                    try {
-                                        sh """
-                                            for i in {1..30}; do
-                                                if curl -f -s ${healthUrl} > /dev/null; then
-                                                    echo "✅ 服务 ${trimmedName} 健康检查通过"
-                                                    break
-                                                fi
-                                                if [ \$i -eq 30 ]; then
-                                                    echo "❌ 服务 ${trimmedName} 健康检查失败"
-                                                    exit 1
-                                                fi
-                                                echo "等待服务 ${trimmedName} 启动... (\$i/30)"
-                                                sleep 2
-                                            done
-                                        """
-                                    } catch (Exception e) {
-                                        echo "❌ 服务 ${trimmedName} 健康检查失败: ${e.message}"
-                                        allHealthy = false
-                                    }
-                                }
-                            }
-
-                            if (!allHealthy) {
-                                error "部分服务健康检查失败"
-                            }
-
-                            // 2. Nacos 服务注册验证
-                            if (selectedServices.contains('nacos')) {
-                                echo "🔍 检查 Nacos 服务注册状态..."
-                                def nacosConfig = NACOS_CONFIG[params.DEPLOY_ENV]
-                                def nacosUrl = "http://${nacosConfig.serverAddr}/nacos/v1/ns/service/list"
-
-                                try {
-                                    sh """
-                                        curl -f -s "${nacosUrl}" | grep -q "name" && echo "✅ Nacos 服务列表正常"
-                                    """
-                                } catch (Exception e) {
-                                    echo "⚠️  Nacos 服务注册状态检查异常"
-                                }
-                            }
-
-                            // 3. 核心业务接口测试
-                            if (selectedServices.contains('gateway')) {
-                                echo "🔍 测试网关路由..."
-                                try {
-                                    sh """
-                                        curl -f -s "http://localhost:9999/actuator/gateway/routes" | grep -q "uri" && echo "✅ 网关路由正常"
-                                    """
-                                } catch (Exception e) {
-                                    echo "⚠️  网关路由检查异常"
-                                }
-                            }
-                        }
-                    }
+                    echo '健康检查完成！'
                 }
             }
         }
     }
 
+    // 后处理：无论构建成功或失败，都执行清理或其他操作
     post {
         always {
-            script {
-                // 生成部署报告
-                def report = """
-                === Spring Cloud Alibaba 部署报告 ===
-                环境: ${params.DEPLOY_ENV}
-                版本: ${params.VERSION}
-                构建编号: #${env.BUILD_NUMBER}
-                提交ID: ${env.GIT_COMMIT}
-                部署策略: ${params.DEPLOY_STRATEGY}
-                部署服务: ${params.SERVICES_TO_DEPLOY}
-                开始时间: ${currentBuild.startTimeInMillis}
-                持续时间: ${currentBuild.durationString}
-                构建结果: ${currentBuild.result}
-                构建URL: ${env.BUILD_URL}
-                """
-
-                echo report
-
-                // 保存报告
-                writeFile file: 'deployment-report.txt', text: report
-                archiveArtifacts artifacts: 'deployment-report.txt'
-            }
+            // 清理工作空间（可选）
+            cleanWs()
         }
-
         success {
-            script {
-                echo "🎉 Spring Cloud Alibaba 微服务部署成功!"
-
-                // 发送成功通知
-                emailext(
-                        subject: "[SUCCESS] Spring Cloud Alibaba 部署完成 - ${params.DEPLOY_ENV.toUpperCase()} - v${params.VERSION}",
-                        body: """
-                    🎯 部署环境: ${params.DEPLOY_ENV}
-                    📦 版本: ${params.VERSION}
-                    🔢 构建编号: #${env.BUILD_NUMBER}
-                    📋 部署服务: ${params.SERVICES_TO_DEPLOY}
-                    ⏱️  持续时间: ${currentBuild.durationString}
-                    🔗 构建详情: ${env.BUILD_URL}
-                    
-                    所有服务健康检查通过，系统运行正常。
-                    """,
-                        to: 'devops@company.com,developers@company.com',
-                        replyTo: 'devops@company.com'
-                )
-            }
+            echo '恭喜，流水线执行成功！'
         }
-
         failure {
-            script {
-                echo "❌ Spring Cloud Alibaba 微服务部署失败!"
-
-                // 自动回滚逻辑
-                if (params.ENABLE_ROLLBACK.toBoolean()) {
-                    echo "🔄 开始自动回滚..."
-                    try {
-                        // 回滚到上一个稳定版本
-                        sh """
-                            # 回滚逻辑示例
-                            echo "执行回滚操作..."
-                            # 这里可以添加具体的回滚脚本
-                        """
-                        echo "✅ 自动回滚完成"
-                    } catch (Exception e) {
-                        echo "❌ 自动回滚失败: ${e.message}"
-                    }
-                }
-
-                // 发送失败通知
-                emailext(
-                        subject: "[FAILURE] Spring Cloud Alibaba 部署失败 - ${params.DEPLOY_ENV.toUpperCase()} - v${params.VERSION}",
-                        body: """
-                    🚨 部署环境: ${params.DEPLOY_ENV}
-                    📦 版本: ${params.VERSION}
-                    🔢 构建编号: #${env.BUILD_NUMBER}
-                    ❌ 失败阶段: ${currentBuild.currentResult}
-                    🔗 构建日志: ${env.BUILD_URL}/console
-                    
-                    请及时检查日志并处理问题。
-                    """,
-                        to: 'devops-alert@company.com,team-lead@company.com',
-                        replyTo: 'devops-alert@company.com',
-                        attachLog: true
-                )
-            }
-        }
-
-        unstable {
-            echo "⚠️  构建结果不稳定，请检查测试报告"
-        }
-
-        cleanup {
-            // 清理工作空间
-            cleanWs(
-                    cleanWhenAborted: true,
-                    cleanWhenFailure: true,
-                    cleanWhenNotBuilt: true,
-                    cleanWhenSuccess: true,
-                    cleanWhenUnstable: true,
-                    deleteDirs: true
-            )
+            echo '流水线执行失败，请检查日志。'
         }
     }
 }
 
-// ============================================
-// 自定义函数：部署 Spring Cloud Alibaba 服务
-// ============================================
-def deploySpringCloudAlibabaService(serviceName) {
-    def serviceConfig = env.SERVICES[serviceName]
-    if (!serviceConfig) {
-        error "❌ 未找到服务配置: ${serviceName}"
+
+// ==================== 共享函数 ====================
+
+// 获取端口映射
+def getPortMap() {
+    def portMap = [:]
+    env.SERVICE_PORTS.split(',').each { mapping ->
+        def parts = mapping.split(':')
+        if (parts.size() == 2) {
+            portMap[parts[0].trim()] = parts[1].trim().toInteger()
+        }
+    }
+    return portMap
+}
+
+// 获取要处理的服务列表
+def getServicesToProcess() {
+    if (params.SERVICES_TO_DEPLOY == 'all') {
+        return env.SERVICE_MODULES.split(',') as List
+    }
+    return [params.SERVICES_TO_DEPLOY]
+}
+
+// ==================== 部署服务函数 ====================
+def deployService(String serviceName, int port) {
+    echo "开始部署服务: ${serviceName}"
+
+    // 定义变量
+    def jarName = "${serviceName}.jar"
+    def targetJar = "${serviceName}/target/${jarName}"
+    def deployDir = "${env.DEPLOY_PATH}/${serviceName}"
+    def pidFile = "${deployDir}/application.pid"
+    def logFile = "${deployDir}/${serviceName}.log"
+    def backupDir = "${env.BACKUP_DIR}/${serviceName}"
+    def timestamp = sh(script: 'date +%Y%m%d_%H%M%S', returnStdout: true).trim()
+
+    // 1. 检查JAR文件是否存在
+    if (!fileExists(targetJar)) {
+        error "❌ 找不到JAR文件: ${targetJar}"
         return
     }
 
-    def deployPath = serviceConfig.deployPath
-    def buildPath = serviceConfig.buildPath
-    def jarName = serviceConfig.jarName ?: "${serviceName}.jar"
-    def port = serviceConfig.port
-    def memory = serviceConfig.memory ?: '512m'
+    echo "服务信息:"
+    echo "  - 服务名称: ${serviceName}"
+    echo "  - 端口: ${port}"
+    echo "  - 部署目录: ${deployDir}"
+    echo "  - JAR文件: ${targetJar}"
 
-    echo "🚀 开始部署服务: ${serviceName}"
-    echo "   📁 部署路径: ${deployPath}"
-    echo "   🔧 构建模块: ${buildPath}"
-    echo "   🐳 端口: ${port}"
-    echo "   💾 内存: ${memory}"
+    // 2. 停止旧服务
+    echo "正在停止 ${serviceName} 服务..."
 
-    try {
-        // 1. 准备部署目录
-        sh """
-            mkdir -p ${deployPath}
-            echo "✅ 创建部署目录: ${deployPath}"
-        """
-
-        // 2. 停止旧服务
-        sh """
-            # 查找进程
-            pid=\$(ps aux | grep -v grep | grep ${jarName} | awk '{print \$2}')
-            if [ -n "\$pid" ]; then
-                echo "🛑 停止旧进程 PID: \$pid"
-                # 优雅停止
-                kill -15 \$pid
-                # 等待停止
+    sh """
+        #!/bin/bash
+        set -e
+        
+        echo "=== 停止服务 ${serviceName} ==="
+        
+        # 检查PID文件是否存在
+        if [ -f "${pidFile}" ]; then
+            PID=\$(cat "${pidFile}")
+            echo "找到PID文件，进程ID: \${PID}"
+            
+            if ps -p \${PID} > /dev/null 2>&1; then
+                echo "停止进程 \${PID}"
+                kill \${PID}
+                
+                # 等待进程退出
                 for i in {1..30}; do
-                    if ! ps -p \$pid > /dev/null 2>&1; then
-                        echo "✅ 进程已停止"
+                    if ! ps -p \${PID} > /dev/null 2>&1; then
+                        echo "进程已正常停止"
                         break
                     fi
-                    echo "⏳ 等待进程停止... (\$i/30)"
+                    echo "等待进程停止... (\${i}/30)"
                     sleep 1
                 done
-                # 强制停止
-                if ps -p \$pid > /dev/null 2>&1; then
-                    echo "⚠️  强制终止进程"
-                    kill -9 \$pid
+                
+                # 强制终止（如果仍然存在）
+                if ps -p \${PID} > /dev/null 2>&1; then
+                    echo "强制终止进程 \${PID}"
+                    kill -9 \${PID}
                     sleep 2
                 fi
             else
-                echo "ℹ️  没有找到运行中的进程"
+                echo "进程 \${PID} 不存在"
             fi
             
-            # 清理旧文件
-            rm -f ${deployPath}/${serviceName}.pid
-        """
-
-        // 3. 获取构建产物
-        unstash "jar-${serviceName}"
-
-        def jarFiles = findFiles(glob: "${buildPath}/target/*.jar")
-        if (jarFiles.length == 0) {
-            error "❌ 未找到构建产物: ${buildPath}/target/*.jar"
-            return
-        }
-
-        def sourceJar = jarFiles[0].path
-
-        // 4. 备份和部署
-        sh """
-            cd ${deployPath}
+            # 删除PID文件
+            rm -f "${pidFile}"
+            echo "PID文件已删除"
+        else
+            echo "PID文件不存在，尝试根据端口停止进程"
             
-            # 备份旧版本
-            if [ -f "${jarName}" ]; then
-                backup_time=\$(date +%Y%m%d%H%M%S)
-                backup_file="${jarName}.backup.\${backup_time}"
-                cp "${jarName}" "\${backup_file}"
-                echo "📦 已备份: \${backup_file}"
-            fi
-            
-            # 复制新版本
-            cp ${WORKSPACE}/${sourceJar} ${jarName}
-            echo "✅ 复制新版本完成"
-            
-            # 准备启动参数
-            JAVA_OPTS="-Xms${memory} -Xmx${memory} -Dfile.encoding=UTF-8"
-            
-            # Spring Cloud Alibaba 特定配置
-            JAVA_OPTS="\${JAVA_OPTS} -Dspring.profiles.active=${params.DEPLOY_ENV}"
-            
-            # Nacos 配置
-            if ([[ ${serviceConfig.dependencies} =~ "nacos" ]] || ${serviceName} == 'seata') {
-                nacosConfig=${NACOS_CONFIG[params.DEPLOY_ENV]}
-                JAVA_OPTS="\${JAVA_OPTS} -Dspring.cloud.nacos.server-addr=\${nacosConfig.serverAddr}"
-                JAVA_OPTS="\${JAVA_OPTS} -Dspring.cloud.nacos.config.namespace=\${nacosConfig.namespace}"
-                JAVA_OPTS="\${JAVA_OPTS} -Dspring.cloud.nacos.discovery.namespace=\${nacosConfig.namespace}"
-            }
-            
-            # Sentinel 配置
-            if ([[ ${serviceConfig.dependencies} =~ "sentinel" ]]) {
-                sentinelConfig=${SENTINEL_CONFIG[params.DEPLOY_ENV] ?: SENTINEL_CONFIG['dev']}
-                JAVA_OPTS="\${JAVA_OPTS} -Dspring.cloud.sentinel.transport.dashboard=localhost:\${sentinelConfig.dashboard}"
-                JAVA_OPTS="\${JAVA_OPTS} -Dspring.cloud.sentinel.transport.port=\${sentinelConfig.transport}"
-            }
-            
-            # Seata 配置
-            if (${serviceName} == 'seata') {
-                seataConfig=${SEATA_CONFIG[params.DEPLOY_ENV] ?: SEATA_CONFIG['dev']}
-                JAVA_OPTS="\${JAVA_OPTS} -Dseata.config.type=\${seataConfig.configType}"
-                JAVA_OPTS="\${JAVA_OPTS} -Dseata.service.vgroup-mapping.default_tx_group=\${seataConfig.serviceGroup}"
-            }
-            
-            echo "启动参数: \${JAVA_OPTS}"
-            
-            # 启动服务
-            nohup ${REMOTE_JAVA_HOME}/bin/java \${JAVA_OPTS} -jar ${jarName} > ${serviceName}.log 2>&1 &
-            
-            # 记录PID
-            echo \$! > ${serviceName}.pid
-            echo "🚀 服务启动，PID: \$(cat ${serviceName}.pid)"
-            
-            # 等待启动
-            sleep 3
-            if ps -p \$(cat ${serviceName}.pid) > /dev/null 2>&1; then
-                echo "✅ 服务进程运行正常"
+            # 根据端口查找进程
+            PORT_PID=\$(lsof -ti:${port} 2>/dev/null || echo "")
+            if [ -n "\${PORT_PID}" ]; then
+                echo "找到监听端口 ${port} 的进程: \${PORT_PID}"
+                kill \${PORT_PID} 2>/dev/null || true
+                sleep 3
+                
+                # 检查是否仍然运行
+                if lsof -ti:${port} >/dev/null 2>&1; then
+                    echo "强制终止端口 ${port} 的进程"
+                    kill -9 \$(lsof -ti:${port}) 2>/dev/null || true
+                fi
             else
-                echo "❌ 服务进程启动失败"
-                echo "=== 错误日志 ==="
-                tail -50 ${serviceName}.log || true
-                echo "================"
+                echo "未找到监听端口 ${port} 的进程"
+            fi
+        fi
+        
+        # 确保端口未被占用
+        sleep 2
+        if lsof -ti:${port} >/dev/null 2>&1; then
+            echo "警告: 端口 ${port} 仍被占用"
+        fi
+    """
+
+    // 3. 创建目录
+    sh """
+        mkdir -p "${deployDir}"
+        mkdir -p "${backupDir}"
+        mkdir -p "${env.LOG_DIR}/${serviceName}"
+    """
+
+    // 4. 备份旧版本
+    sh """
+        if [ -f "${deployDir}/${jarName}" ]; then
+            BACKUP_FILE="${backupDir}/${jarName}.backup.\${timestamp}"
+            echo "备份旧版本到: \${BACKUP_FILE}"
+            cp "${deployDir}/${jarName}" "\${BACKUP_FILE}"
+            
+            # 清理旧备份（保留最近5个）
+            ls -t "${backupDir}/${jarName}.backup."* 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
+        fi
+    """
+
+    // 5. 复制新的JAR文件
+    echo "复制新的JAR文件..."
+    sh """
+        cp "${targetJar}" "${deployDir}/"
+        echo "JAR文件已复制到: ${deployDir}/${jarName}"
+        ls -lh "${deployDir}/${jarName}"
+    """
+
+    // 6. 生成启动脚本
+    def startScript = """
+        #!/bin/bash
+        # ${serviceName} 启动脚本
+        # 生成时间: \$(date)
+        
+        cd "${deployDir}"
+        
+        # 设置JVM参数
+        JAVA_OPTS="${env.JAVA_OPTS}"
+        
+        # 根据环境设置profile
+        SPRING_PROFILE="${params.DEPLOY_ENV}"
+        
+        echo "启动服务: ${serviceName}"
+        echo "工作目录: \$(pwd)"
+        echo "JVM参数: \${JAVA_OPTS}"
+        echo "Spring Profile: \${SPRING_PROFILE}"
+        echo "启动时间: \$(date)"
+        
+        # 启动服务
+        nohup ${env.REMOTE_JAVA_HOME}/bin/java \${JAVA_OPTS} \\
+            -Dserver.port=${port} \\
+            -Dspring.profiles.active=\${SPRING_PROFILE} \\
+            -jar ${jarName} \\
+            > "${logFile}" 2>&1 &
+        
+        # 记录PID
+        echo \$! > "${pidFile}"
+        echo "服务启动完成，PID: \$(cat ${pidFile})"
+        echo "日志文件: ${logFile}"
+    """
+
+    writeFile file: "${deployDir}/start.sh", text: startScript
+    sh "chmod +x ${deployDir}/start.sh"
+
+    // 7. 生成停止脚本
+    def stopScript = """
+        #!/bin/bash
+        # ${serviceName} 停止脚本
+        
+        echo "停止服务: ${serviceName}"
+        
+        if [ -f "${pidFile}" ]; then
+            PID=\$(cat "${pidFile}")
+            echo "找到进程ID: \${PID}"
+            
+            if ps -p \${PID} > /dev/null 2>&1; then
+                echo "发送TERM信号到进程 \${PID}"
+                kill \${PID}
+                
+                # 等待进程退出
+                for i in {1..30}; do
+                    if ! ps -p \${PID} > /dev/null 2>&1; then
+                        echo "进程已停止"
+                        break
+                    fi
+                    echo "等待进程停止... (\${i}/30)"
+                    sleep 1
+                done
+                
+                # 强制终止
+                if ps -p \${PID} > /dev/null 2>&1; then
+                    echo "强制终止进程 \${PID}"
+                    kill -9 \${PID}
+                fi
+            else
+                echo "进程 \${PID} 不存在"
+            fi
+            
+            rm -f "${pidFile}"
+            echo "PID文件已删除"
+        else
+            echo "PID文件不存在"
+        fi
+        
+        echo "服务停止完成"
+    """
+
+    writeFile file: "${deployDir}/stop.sh", text: stopScript
+    sh "chmod +x ${deployDir}/stop.sh"
+
+    // 8. 生成状态检查脚本
+    def statusScript = """
+        #!/bin/bash
+        # ${serviceName} 状态检查脚本
+        
+        echo "服务状态: ${serviceName}"
+        
+        if [ -f "${pidFile}" ]; then
+            PID=\$(cat "${pidFile}")
+            if ps -p \${PID} > /dev/null 2>&1; then
+                echo "状态: 运行中"
+                echo "进程ID: \${PID}"
+                echo "启动时间: \$(ps -o lstart= -p \${PID} 2>/dev/null || echo "未知")"
+                echo "内存使用: \$(ps -o rss= -p \${PID} 2>/dev/null | awk '{printf \"%.1f MB\\n\", \$1/1024}' || echo "未知")"
+                echo "CPU使用: \$(ps -o %cpu= -p \${PID} 2>/dev/null | xargs || echo "未知")%"
+                
+                # 检查端口
+                if lsof -ti:${port} >/dev/null 2>&1; then
+                    echo "端口状态: ${port} 监听中"
+                    
+                    # 健康检查
+                    RESPONSE=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${port}/actuator/health 2>/dev/null || echo "000")
+                    if [ "\${RESPONSE}" = "200" ]; then
+                        echo "健康状态: 正常"
+                    else
+                        echo "健康状态: 异常 (HTTP: \${RESPONSE})"
+                    fi
+                else
+                    echo "端口状态: ${port} 未监听"
+                fi
+            else
+                echo "状态: 已停止 (PID文件存在但进程不存在)"
+                rm -f "${pidFile}"
+            fi
+        else
+            echo "状态: 已停止"
+        fi
+    """
+
+    writeFile file: "${deployDir}/status.sh", text: statusScript
+    sh "chmod +x ${deployDir}/status.sh"
+
+    // 9. 启动服务
+    echo "启动新服务 ${serviceName}..."
+    sh """
+        cd "${deployDir}"
+        ./start.sh
+        
+        # 等待服务启动
+        sleep 5
+        
+        # 检查是否启动成功
+        if [ -f "${pidFile}" ]; then
+            PID=\$(cat "${pidFile}")
+            if ps -p \${PID} > /dev/null 2>&1; then
+                echo "服务启动成功，进程ID: \${PID}"
+            else
+                echo "错误: 服务进程不存在"
+                echo "=== 最后10行日志 ==="
+                tail -n 10 "${logFile}" 2>/dev/null || echo "日志文件不存在"
                 exit 1
             fi
-        """
+        else
+            echo "错误: PID文件未创建"
+            exit 1
+        fi
+    """
 
-        echo "🎯 服务 ${serviceName} 部署完成"
-
-    } catch (Exception e) {
-        error "❌ 部署服务 ${serviceName} 失败: ${e.message}"
-        throw e
-    }
+    echo "✅ 服务 ${serviceName} 部署完成"
 }
