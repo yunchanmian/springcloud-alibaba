@@ -7,3 +7,5 @@ spring:
 
 server:
   port: 48070
+  servlet:
+    context-path: /gray-consumer

@@ -436,7 +436,7 @@ pipeline {
                                     def response = sh(
                                             script: """
                                             curl -s -o /dev/null -w "%{http_code}" \
-                                            http://localhost:${port}/actuator/health \
+                                            http://localhost:${port}/${serviceName}/actuator/health \
                                             --max-time 5 || echo "000"
                                         """,
                                             returnStdout: true

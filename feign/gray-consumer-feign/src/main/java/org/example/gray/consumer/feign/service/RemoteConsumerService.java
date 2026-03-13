@@ -17,6 +17,6 @@ public interface RemoteConsumerService {
     /**
      * 示例：聚合调用 gray-provider，用于验证全链路灰度（网关 → consumer → provider 版本一致）
      */
-    @GetMapping("/consumer/hello")
+    @GetMapping("/gray-consumer/hello")
     String hello(@RequestParam(value = "from", defaultValue = "gateway") String from);
 }

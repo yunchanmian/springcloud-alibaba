@@ -50,14 +50,14 @@ spring:
         - id: product-service-route
           uri: lb://gray-provider
           predicates:
-            - Path=/api/provider/**
+            - Path=/api/gray-provider/**
           filters:
             - StripPrefix=1
 
         - id: consumer-service-route
           uri: lb://gray-consumer
           predicates:
-            - Path=/api/consumer/**
+            - Path=/api/gray-provider/**
           filters:
             - StripPrefix=1
 
