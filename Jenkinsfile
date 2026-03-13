@@ -90,39 +90,39 @@ pipeline {
 
     stages {
         // 阶段1：检出代码
-        stage('Checkout') {
-            steps {
-                // 从 Git 仓库拉取代码
-                echo '开始从Git仓库拉取代码...'
-                // 从Git仓库拉取代码，支持分支选择和凭证认证
-                checkout scmGit(branches: [[
-                    name: "*/${params.BRANCH_NAME ?: 'main'}"]],
-                    extensions: [],
-                    userRemoteConfigs: [[
-                        credentialsId: '8a75608f-a8cc-45dd-9a40-ade046ffb18a',
-                        url: 'https://github.com/yunchanmian/springcloud-alibaba.git']
-                    ])
-
-                // 记录构建信息
-                script {
-                    sh """
-                        echo "=== 构建信息 ===" > build-info.txt
-                        echo "项目: ${PROJECT_NAME}" >> build-info.txt
-                        echo "构建编号: ${BUILD_NUMBER}" >> build-info.txt
-                        echo "Git分支: ${env.BRANCH_NAME}" >> build-info.txt
-                        echo "Git提交: \${GIT_COMMIT}" >> build-info.txt
-                        echo "构建时间: \$(date +\"%Y-%m-%d %H:%M:%S\")" >> build-info.txt
-                        echo "构建用户: \${BUILD_USER_ID}" >> build-info.txt
-                        echo "工作空间: ${env.WORKSPACE}" >> build-info.txt
-                    """
-                    // 显示构建信息
-                    echo "检出代码完成，分支：${env.BRANCH_NAME}"
-                    echo "提交ID：${env.GIT_COMMIT}"
-                    echo "  - 工作目录: ${env.WORKSPACE}"
-                }
-                echo '代码拉取完成！'
-            }
-        }
+//        stage('Checkout') {
+//            steps {
+//                // 从 Git 仓库拉取代码
+//                echo '开始从Git仓库拉取代码...'
+//                // 从Git仓库拉取代码，支持分支选择和凭证认证
+//                checkout scmGit(branches: [[
+//                    name: "*/${params.BRANCH_NAME ?: 'main'}"]],
+//                    extensions: [],
+//                    userRemoteConfigs: [[
+//                        credentialsId: '8a75608f-a8cc-45dd-9a40-ade046ffb18a',
+//                        url: 'https://github.com/yunchanmian/springcloud-alibaba.git']
+//                    ])
+//
+//                // 记录构建信息
+//                script {
+//                    sh """
+//                        echo "=== 构建信息 ===" > build-info.txt
+//                        echo "项目: ${PROJECT_NAME}" >> build-info.txt
+//                        echo "构建编号: ${BUILD_NUMBER}" >> build-info.txt
+//                        echo "Git分支: ${env.BRANCH_NAME}" >> build-info.txt
+//                        echo "Git提交: \${GIT_COMMIT}" >> build-info.txt
+//                        echo "构建时间: \$(date +\"%Y-%m-%d %H:%M:%S\")" >> build-info.txt
+//                        echo "构建用户: \${BUILD_USER_ID}" >> build-info.txt
+//                        echo "工作空间: ${env.WORKSPACE}" >> build-info.txt
+//                    """
+//                    // 显示构建信息
+//                    echo "检出代码完成，分支：${env.BRANCH_NAME}"
+//                    echo "提交ID：${env.GIT_COMMIT}"
+//                    echo "  - 工作目录: ${env.WORKSPACE}"
+//                }
+//                echo '代码拉取完成！'
+//            }
+//        }
 
 
         // 阶段2：环境检查
