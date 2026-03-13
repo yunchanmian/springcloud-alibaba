@@ -31,7 +31,7 @@ pipeline {
         // 微服务模块列表（项目子模块），使用逗号分隔的字符串
         SERVICE_MODULES = 'gray-gateway,gray-consumer,gray-provider'
         // 服务端口映射（格式：服务名:端口，用于停止服务和健康检查）
-        SERVICE_PORTS = 'gray-gateway:48080,gray-consumer:48082,gray-provider:48081'
+        SERVICE_PORTS = 'gray-gateway:48080,gray-consumer:48070,gray-provider:48090'
         // 是否跳过单元测试（可参数化）
         SKIP_TESTS = 'false'
         // 此变量将用于Maven命令，激活对应的profile
