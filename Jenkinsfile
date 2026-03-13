@@ -92,16 +92,16 @@ pipeline {
         // 阶段1：检出代码
         stage('Checkout') {
             steps {
-//                // 从 Git 仓库拉取代码
-//                echo '开始从Git仓库拉取代码...'
-//                // 从Git仓库拉取代码，支持分支选择和凭证认证
-//                checkout scmGit(branches: [[
-//                    name: "*/${params.BRANCH_NAME ?: 'main'}"]],
-//                    extensions: [],
-//                    userRemoteConfigs: [[
-//                        credentialsId: '8a75608f-a8cc-45dd-9a40-ade046ffb18a',
-//                        url: 'https://github.com/yunchanmian/springcloud-alibaba.git']
-//                    ])
+                // 从 Git 仓库拉取代码
+                echo '开始从Git仓库拉取代码...'
+                // 从Git仓库拉取代码，支持分支选择和凭证认证
+                checkout scmGit(branches: [[
+                    name: "*/${params.BRANCH_NAME ?: 'main'}"]],
+                    extensions: [],
+                    userRemoteConfigs: [[
+                        credentialsId: '8a75608f-a8cc-45dd-9a40-ade046ffb18a',
+                        url: 'https://github.com/yunchanmian/springcloud-alibaba.git']
+                    ])
 
                 // 记录构建信息
                 script {
@@ -787,7 +787,7 @@ EOF
                     echo "端口状态: ${port} 监听中"
                     
                     # 健康检查
-                    RESPONSE=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${port}/actuator/health 2>/dev/null || echo "000")
+                    RESPONSE=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${port}/${serviceName}/actuator/health 2>/dev/null || echo "000")
                     if [ "\${RESPONSE}" = "200" ]; then
                         echo "健康状态: 正常"
                     else

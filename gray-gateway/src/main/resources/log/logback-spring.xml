@@ -142,6 +142,8 @@
                 <maxHistory>30</maxHistory>
             </rollingPolicy>
         </appender>
+        <!-- 或者更精确地只屏蔽这个特定的类 -->
+        <logger name="org.reflections.Reflections" level="ERROR"/>
         <root level="INFO">
             <appender-ref ref="FILE"/>
             <appender-ref ref="INFO_FILE" />
