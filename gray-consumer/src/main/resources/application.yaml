@@ -1,0 +1,6 @@
+# application.yml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"  # 打开所有体检项目

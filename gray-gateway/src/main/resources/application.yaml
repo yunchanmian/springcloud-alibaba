@@ -9,6 +9,13 @@ gray:
         - "1002"
         - "1003"
 
+# application.yml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"  # 打开所有体检项目
+
 spring:
   main:
     allow-circular-references: true
