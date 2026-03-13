@@ -8,6 +8,9 @@ gray:
         - "1001"
         - "1002"
         - "1003"
+#日志配置
+logging:
+  config: classpath:log/logback-spring.xml #根据运行环境读取日志配置
 
 # application.yml
 management:

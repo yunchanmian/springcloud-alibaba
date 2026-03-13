@@ -686,8 +686,8 @@ EOF
             echo "✅ 文件存在"
             ls -lh "${deployDir}/start.sh"
             echo ""
-            echo "=== 文件内容前5行 ==="
-            head -5 "${deployDir}/start.sh"
+            echo "=== 文件内容前20行 ==="
+            head -20 "${deployDir}/start.sh"
         else
             echo "❌ 文件不存在，尝试重新创建..."
             cat > "${deployDir}/start.sh" << 'EOF' 
@@ -823,8 +823,8 @@ EOF
                 echo "服务启动成功，进程ID: \${PID}"
             else
                 echo "错误: 服务进程不存在"
-                echo "=== 最后10行日志 ==="
-                tail -n 10 "${logFile}" 2>/dev/null || echo "日志文件不存在"
+                echo "=== 最后30行日志 ==="
+                tail -n 30 "${logFile}" 2>/dev/null || echo "日志文件不存在"
                 exit 1
             fi
         else
